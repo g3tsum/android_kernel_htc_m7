@@ -908,6 +908,10 @@ do_blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 
 	blk_finish_plug(&plug);
 
+	/*
+	 * It is possible that, we return short IO due to end of file.
+	 * In that case, we need to release all the pages we got hold on.
+	 */
 	dio_cleanup(dio, &sdio);
 
 	if (rw == READ && (dio->flags & DIO_LOCKING))
