@@ -3339,10 +3339,10 @@ static void msmsdcc_print_rpm_info(struct msmsdcc_host *host)
 {
 	struct device *dev = mmc_dev(host->mmc);
 
-	pr_err("%s: PM: sdcc_suspended=%d, pending_resume=%d, sdcc_suspending=%d\n",
+	pr_info("%s: PM: sdcc_suspended=%d, pending_resume=%d, sdcc_suspending=%d\n",
 		mmc_hostname(host->mmc), host->sdcc_suspended,
 		host->pending_resume, host->sdcc_suspending);
-	pr_err("%s: RPM: runtime_status=%d, usage_count=%d,"
+	pr_info("%s: RPM: runtime_status=%d, usage_count=%d,"
 		" is_suspended=%d, disable_depth=%d, runtime_error=%d,"
 		" request_pending=%d, request=%d\n",
 		mmc_hostname(host->mmc), dev->power.runtime_status,
@@ -3368,11 +3368,7 @@ static int msmsdcc_enable(struct mmc_host *mmc)
 	if (mmc->card && mmc_card_sdio(mmc->card))
 		goto out;
 
-	if (is_mmc_platform(host->plat) || is_sd_platform(host->plat))
-		goto get_sync;
-
-	if (host->sdcc_suspended && host->pending_resume &&
-			!pm_runtime_suspended(dev)) {
+	if (host->sdcc_suspended && host->pending_resume) {
 		host->pending_resume = false;
 		pm_runtime_get_noresume(dev);
 		rc = msmsdcc_runtime_resume(dev);
@@ -3398,8 +3394,8 @@ get_sync:
 
 skip_get_sync:
 	if (rc < 0) {
-		pr_info("%s: %s: failed with error %d", mmc_hostname(mmc),
-				__func__, rc);
+		WARN(1, "%s: %s: failed with error %d\n", mmc_hostname(mmc),
+		     __func__, rc);
 		msmsdcc_print_rpm_info(host);
 		return rc;
 	}
@@ -3430,12 +3426,9 @@ static int msmsdcc_disable(struct mmc_host *mmc)
 
 	rc = pm_runtime_put_sync(mmc->parent);
 
-	if (is_sd_platform(host->plat))
-		atomic_set(&host->disable_count_usage, atomic_read(&dev->power.usage_count));
-
 	if (rc < 0) {
-		pr_info("%s: %s: failed with error %d", mmc_hostname(mmc),
-				__func__, rc);
+		WARN(1, "%s: %s: failed with error %d\n", mmc_hostname(mmc),
+		     __func__, rc);
 		msmsdcc_print_rpm_info(host);
 	}
 
@@ -6308,8 +6301,7 @@ msmsdcc_runtime_resume(struct device *dev)
 
 		wake_unlock(&host->sdio_suspend_wlock);
 	}
-	if (is_sd_platform(host->plat))
-		mutex_unlock(&host->rpm_mutex);
+	host->pending_resume = false;
 	pr_debug("%s: %s: end\n", mmc_hostname(mmc), __func__);
 
 #ifdef CONFIG_WIFI_MMC
@@ -6542,10 +6534,15 @@ static int msmsdcc_pm_resume(struct device *dev)
 	if (host->plat->is_sdio_al_client)
 		return 0;
 
-	if (mmc->card && (mmc_card_sdio(mmc->card) || mmc_card_sd(mmc->card) || mmc_card_mmc(mmc->card))) {
-		rc = msmsdcc_resume(dev);
-		host->pending_resume = true;
-	} else
+	if (mmc->card && mmc_card_sdio(mmc->card))
+		rc = msmsdcc_runtime_resume(dev);
+	/*
+	 * As runtime PM is enabled before calling the device's platform resume
+	 * callback, we use the pm_runtime_suspended API to know if SDCC is
+	 * really runtime suspended or not and set the pending_resume flag only
+	 * if its not runtime suspended.
+	 */
+	else if (!pm_runtime_suspended(dev))
 		host->pending_resume = true;
 
 	if (!is_sd_platform(host->plat) && host->plat->status_irq) {
