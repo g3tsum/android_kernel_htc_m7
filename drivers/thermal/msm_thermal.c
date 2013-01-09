@@ -24,6 +24,11 @@
 #include <mach/cpufreq.h>
 #include <mach/perflock.h>
 
+#define POLLING_DELAY 100
+
+unsigned int temp_threshold = 60;
+module_param(temp_threshold, int, 0755);
+
 static int enabled;
 static struct msm_thermal_data msm_thermal_info;
 static uint32_t limited_max_freq = MSM_CPUFREQ_NO_LIMIT;
@@ -78,6 +83,34 @@ static void check_temp(struct work_struct *work)
 		msm_thermal_info.limit_temp - msm_thermal_info.temp_hysteresis)
 		max_freq = MSM_CPUFREQ_NO_LIMIT;
 
+	if (!limit_init) {
+		ret = msm_thermal_get_freq_table();
+		if (ret)
+			goto reschedule;
+		else
+			limit_init = 1;
+	}
+
+	if (temp >= temp_threshold) {
+		if (limit_idx == limit_idx_low)
+			goto reschedule;
+
+		limit_idx -= msm_thermal_info.freq_step;
+		if (limit_idx < limit_idx_low)
+			limit_idx = limit_idx_low;
+		max_freq = table[limit_idx].frequency;
+	} else if (temp < temp_threshold -
+		 msm_thermal_info.temp_hysteresis_degC) {
+		if (limit_idx == limit_idx_high)
+			goto reschedule;
+
+		limit_idx += msm_thermal_info.freq_step;
+		if (limit_idx >= limit_idx_high) {
+			limit_idx = limit_idx_high;
+			max_freq = MSM_CPUFREQ_NO_LIMIT;
+		} else
+			max_freq = table[limit_idx].frequency;
+	}
 	if (max_freq == limited_max_freq)
 		goto reschedule;
 
@@ -91,8 +124,7 @@ static void check_temp(struct work_struct *work)
 
 reschedule:
 	if (enabled)
-		schedule_delayed_work(&check_temp_work,
-				msecs_to_jiffies(msm_thermal_info.poll_ms));
+		schedule_delayed_work(&check_temp_work, msecs_to_jiffies(POLLING_DELAY));
 }
 
 static void disable_msm_thermal(void)
@@ -145,4 +177,55 @@ int __init msm_thermal_init(struct msm_thermal_data *pdata)
 	schedule_delayed_work(&check_temp_work, 0);
 
 	return ret;
+}
+
+static int __devinit msm_thermal_dev_probe(struct platform_device *pdev)
+{
+	int ret = 0;
+	char *key = NULL;
+	struct device_node *node = pdev->dev.of_node;
+	struct msm_thermal_data data;
+
+	memset(&data, 0, sizeof(struct msm_thermal_data));
+	key = "qcom,sensor-id";
+	ret = of_property_read_u32(node, key, &data.sensor_id);
+	if (ret)
+		goto fail;
+	WARN_ON(data.sensor_id >= TSENS_MAX_SENSORS);
+
+	key = "qcom,temp-hysteresis";
+	ret = of_property_read_u32(node, key, &data.temp_hysteresis_degC);
+	if (ret)
+		goto fail;
+
+	key = "qcom,freq-step";
+	ret = of_property_read_u32(node, key, &data.freq_step);
+
+fail:
+	if (ret)
+		pr_err("%s: Failed reading node=%s, key=%s\n",
+		       __func__, node->full_name, key);
+	else
+		ret = msm_thermal_init(&data);
+
+	return ret;
+}
+
+static struct of_device_id msm_thermal_match_table[] = {
+	{.compatible = "qcom,msm-thermal"},
+	{},
+};
+
+static struct platform_driver msm_thermal_device_driver = {
+	.probe = msm_thermal_dev_probe,
+	.driver = {
+		.name = "msm-thermal",
+		.owner = THIS_MODULE,
+		.of_match_table = msm_thermal_match_table,
+	},
+};
+
+int __init msm_thermal_device_init(void)
+{
+	return platform_driver_register(&msm_thermal_device_driver);
 }
