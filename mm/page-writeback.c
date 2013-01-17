@@ -35,6 +35,7 @@
 #include <linux/buffer_head.h> 
 #include <linux/pagevec.h>
 #include <trace/events/writeback.h>
+#include <linux/earlysuspend.h>
 
 #define MAX_PAUSE		max(HZ/5, 1)
 
@@ -44,6 +45,12 @@
 
 #define RATELIMIT_CALC_SHIFT	10
 
+bool resume = true;
+
+/*
+ * After a CPU has dirtied this many pages, balance_dirty_pages_ratelimited
+ * will look to see if it needs to force writeback or throttling.
+ */
 static long ratelimit_pages = 32;
 
 
@@ -57,7 +64,10 @@ int vm_dirty_ratio = 20;
 
 unsigned long vm_dirty_bytes;
 
-unsigned int dirty_writeback_interval = 5 * 100; 
+/*
+ * The interval between `kupdate'-style writebacks
+ */
+unsigned int dirty_writeback_interval = 0; /* centiseconds */
 
 EXPORT_SYMBOL_GPL(dirty_writeback_interval);
 
@@ -963,9 +973,44 @@ static struct notifier_block __cpuinitdata ratelimit_nb = {
 	.next		= NULL,
 };
 
+static void dirty_early_suspend(struct early_suspend *handler)
+{
+	dirty_writeback_interval = 5 * 100;
+}
+
+static void dirty_late_resume(struct early_suspend *handler)
+{
+	dirty_writeback_interval = 0;
+}
+
+static struct early_suspend dirty_suspend = {
+	.suspend = dirty_early_suspend,
+	.resume = dirty_late_resume,
+};
+
+/*
+ * Called early on to tune the page writeback dirty limits.
+ *
+ * We used to scale dirty pages according to how total memory
+ * related to pages that could be allocated for buffers (by
+ * comparing nr_free_buffer_pages() to vm_total_pages.
+ *
+ * However, that was when we used "dirty_ratio" to scale with
+ * all memory, and we don't do that any more. "dirty_ratio"
+ * is now applied to total non-HIGHPAGE memory (by subtracting
+ * totalhigh_pages from vm_total_pages), and as such we can't
+ * get into the old insane situation any more where we had
+ * large amounts of dirty pages compared to a small amount of
+ * non-HIGHMEM memory.
+ *
+ * But we might still want to scale the dirty_ratio by how
+ * much memory the box has..
+ */
 void __init page_writeback_init(void)
 {
 	int shift;
+	
+	register_early_suspend(&dirty_suspend);
 
 	writeback_set_ratelimit();
 	register_cpu_notifier(&ratelimit_nb);
