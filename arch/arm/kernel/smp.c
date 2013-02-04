@@ -155,8 +155,8 @@ void __ref cpu_die(void)
 	local_irq_disable();
 	mb();
 
-	
-	RCU_NONIDLE(complete(&cpu_died));
+	/* Tell __cpu_die() that this CPU is now safe to dispose of */
+	complete(&cpu_died);
 
 	platform_cpu_die(cpu);
 
