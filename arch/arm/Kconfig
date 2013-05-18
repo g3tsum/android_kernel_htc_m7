@@ -252,6 +252,16 @@ config PHYS_OFFSET
 	  Please provide the physical address corresponding to the
 	  location of main memory in your system.
 
+config ALLOW_CPU_ALIGNMENT
+  bool "Allow CPU-based alignment handling"
+  default y if ARCH_MSM_SCORPION || ARCH_MSM_SCORPIONMP
+  help
+    Advanced ARM processors, such as the Cortex series and ARMv7-based
+    CPUS are capable of performing unaligned accesses for many types of
+    memory accesses.  Typically, using a cpu-based alignment fixup is
+    faster than doing such a fixup in software.  For best performance
+    on advanced CPUs, say Y here
+
 config GENERIC_BUG
 	def_bool y
 	depends on BUG
